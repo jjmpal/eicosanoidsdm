@@ -1,0 +1,548 @@
+---
+title: "Eicosanoids mediators of diabetes"
+author: "Joonatan Palmu"
+date: "`r format(Sys.time(), '%d.%m.%Y')`"
+---
+
+```{r options, echo = FALSE}
+options(knitr.kable.NA = "")
+knitr::opts_chunk$set(include = TRUE,
+                      echo = TRUE,
+                      message = FALSE,
+                      results='asis',
+                      cache=FALSE,
+                      warning=FALSE)
+```
+
+# Libraries
+
+<details>
+  <summary>Open/Close</summary>
+
+```{r libraries, results = 'hide'}
+library(dplyr)
+library(sessioninfo)
+library(knitr)
+library(readr)
+library(tidyr)
+library(parallel)
+library(ggplot2)
+library(broom)
+library(gridExtra)
+library(gplots)
+library(survival)
+library(purrr)
+library(survminer)
+library(tibble)
+library(My.stepwise)
+library(car)
+library(forestplot)
+library(rlang)
+library(ggfortify)
+```
+
+</details>
+
+# Session
+
+Analyses were performed using `r sessioninfo::platform_info()$version` on 
+`r sessioninfo::platform_info()$system`.
+
+<details><summary>Packages</summary>
+
+```{r Session info, echo = FALSE}
+sessioninfo::package_info() %>%
+    data.frame %>%
+    filter(attached == TRUE) %>%
+    select(package, loadedversion, date, source) %>%
+    kable(row.names = FALSE)
+```
+
+</details>
+
+```{r read last session, include = FALSE, eval = FALSE}
+list.files("session", full.names = TRUE) %>%
+    sort %>%
+    tail(n=1) %>%
+    pass(fun = function(x) message(sprintf("Loading '%s'.", x))) %>%
+    load
+```
+
+# Source code
+
+```{r source file list, echo = FALSE}
+sourcefiles <- c("articles-importer.R", "articles-utils.R", "articles-models.R", "articles-plots.R", "articles-step.R", "articles-riskscore.R")
+```
+
+```{r import source files, echo = FALSE}
+for (f in sourcefiles) {
+    source(f)
+}
+```
+
+```{r embed files to html, echo = FALSE}
+xfun::embed_files(c("eicosanoidsdm.Rmd", sourcefiles))
+```
+
+#  Folder structure
+
+```{r clean folders}
+rmdir("cache")
+mkdir("cache", "report", "session")
+```
+
+# Variables
+
+<details><summary>Included variables</summary>
+
+```{r variables to be include, echo = FALSE}
+( vars.included <- c("BL_AGE" = "continuous",
+                    "female" = "binomial",
+                    "PAINO" = "continuous",
+                    "PITUUS" = "continuous",
+                    "VYOTARO" = "continuous",
+                    "LANTIO" = "continuous",
+                    "BMI" = "continuous",
+                    "WHR" = "continuous",
+                    "SYSTM" = "continuous",
+                    "DIASM" = "continuous",
+                    "ALKI2_FR02" = "continuous",
+                    "HDL" = "continuous",
+                    "LDL_DIRECT" = "continuous",
+                    "TRIG" = "continuous",
+                    "BP_TREAT" = "binomial",
+                    "KOULGR" = "binomial",
+                    "CURR_SMOKE" = "binomial",
+                    "Q57X" = "categorical",
+                    "hsCRP" = "continuous",
+                    "DIAB_FAMILYHIST" = "binomial",
+                    "PREVAL_DIAB_T2" = "binomial",
+                    "INCIDENT_DIAB_T2" = "binomial",
+                    "DIAB_T2_AGEDIFF" = "continuous",
+                    "EAST" = "binomial",
+                    "plate" = "categorical") ) %>%
+    tibble::enframe(., name = "var", value = "type") %>%
+    dplyr::left_join(., importinfo(), by = "var") %>%
+    kable
+```
+
+</details>
+
+<details><summary>Variables used for filtering</summary>
+
+```{r variables that are used to exclude participants, echo = FALSE}
+( vars.filter <- c("pregnant" = "binomial",
+                   "PREVAL_DIAB_T1" = "binomial",
+                   "INCIDENT_DIAB_T1" = "binomial",
+                   "INCIDENT_CR_ANYCANC" = "binomial",
+                   "PREVAL_CR_ANYCANC" = "binomial") ) %>%
+    tibble::enframe(., name = "var", value = "type") %>%
+    dplyr::left_join(., importinfo(), by = "var") %>%
+    kable
+```
+
+</details>
+
+# Data import
+
+For the analyses, exclude pregnant women, prevalent/incident type 1 diabetics
+and cancers (except non-melanoma skin cancers aka ICD10 category C44).
+
+```{r import data}
+dset <- importdata(replacenawithmin = TRUE, normalize = TRUE) %>%
+    filter_at(vars(getall(vars.filter)), all_vars(. == 0))  %>%
+    mutate_at(vars(starts_with("INCIDENT_")), as.numeric) %>%
+    select(one_of(getall(vars.included)), starts_with("mzid_")) %>%
+    drop_na()
+```
+
+# Characteristics
+
+<details><summary>Continuous variables</summary>
+
+```{r Characteristics continuous, echo = FALSE}
+dset %>%
+    select(one_of(getcontinuous(vars.included))) %>%
+    gather(key, value) %>%
+    group_by(key) %>%
+    summarize(n = n(),
+              na = sum(is.na(value)),
+              mean = mean(value, na.rm = TRUE),
+              sd = sd(value, na.rm = TRUE),
+              gmean = gmean(value, na.rm = TRUE),
+              iqr = IQR(value, na.rm = TRUE)) %>%
+    mutate_if(is.numeric, ~round(., 3)) %>%
+    kable
+```
+
+</details>
+
+<details><summary>Categorical variables</summary>
+
+```{r Characteristics cagegorical, echo = FALSE}
+dset %>%
+    select(one_of(getcategorical(vars.included) %difference% "plate")) %>%
+    gather(key, value) %>%
+    group_by(key) %>%
+    summarize(n = n(),
+              na = sum(is.na(value)),
+              zero = sum(value == 0, na.rm = TRUE),
+              one = sum(value == 1, na.rm = TRUE),
+              two = sum(value == 2, na.rm = TRUE),
+              three = sum(value == 3, na.rm = TRUE)) %>%
+    mutate_if(is.numeric, ~round(., 3)) %>%
+    kable
+```
+
+</deails>
+
+# Association of eicosanoids with outcome variable
+
+Association of eicosanoids with outcome variable (figure 1, for
+example Manhattan plot): how are eicosanoids associated with prevalent
+diabetes? Logistic regression (outcome prevalent type 2 diabetes)
+adjusted for age, sex, BMI, parental history of diabetes, systolic
+blood pressure, antihypertensive medication, trigly and mass
+spectrometry batch. Bonferroni or **FDR correction** for significance
+levels.
+
+```{r manhattan models}
+glm.dm <- loop.binomial(dset = dset,
+                        response = "PREVAL_DIAB_T2",
+                        loops = getmetabolistes(dset),
+                        covariates = c("BL_AGE", "female", "BMI",
+                                       "DIAB_FAMILYHIST", "SYSTM",
+                                       "BP_TREAT", "TRIG", "plate"))
+```
+
+<details><summary>Numerical results</summary>
+
+```{r manhattan results, echo = FALSE}
+( ret.dm <- loop.results(glm.dm, method = "fdr") ) %>%
+    arrange(qval) %>%
+    kable
+```
+
+</details>
+
+<details><summary>Manhattan plot</summary>
+
+```{r manhattan plot, echo = FALSE}
+g.manhattan <- plot.manhattanplot(ret.dm, psignf = 0.05, nlabels = 10)
+ggsave(file = "cache/manhattanplot.png",
+       plot = g.manhattan,
+       height = 6,
+       width = 7,
+       dpi = 300)
+```
+
+<img src = "cache/manhattanplot.png" />
+</details>
+
+<details><summary>Residuals</summary>
+
+```{r residuals, echo = FALSE}
+ggsave(file="cache/binomialmodels-residuals.png",
+       arrangeGrob(grobs = loop.residuals(filter.significant(glm.dm)),
+                   ncol = 8,
+                   bottom = "Predicted values",
+                   left = "Residuals"),
+       height = 20,
+       width = 12,
+       dpi = 300,
+       unit = "in")
+```
+
+<img src="cache/binomialmodels-residuals.png" />
+
+</details>
+
+<details><summary>qq-plot</summary>
+
+```{r binomial qq, echo = FALSE}
+ggsave(file = "cache/binomialmodels-qq.png",
+       plot = grid.arrange(grobs = loop.qq(filter.significant(glm.dm)),
+                           ncol = 8,
+                           bottom = "Theoretical quantiles",
+                           left = "Standardized residuals"),
+       height = 20,
+       width = 12,
+       dpi = 300,
+       unit = "in")
+```
+
+<img src = "cache/binomialmodels-qq.png" />
+
+</details>
+
+# Correlation matrix
+
+Correlations (figure 2, for example heatmap): how are the eicosanoids
+(of interest) correlated with each other and hs-CRP? Spearman rank
+correlation.
+
+```{r correlation model}
+ret.correlation <-  ret.dm %>%
+    filter(qval < 0.05) %>%
+    pull(term) %>%
+    c(., "hsCRP") %>%
+    spearmancorrelation(dset = dset, vars = .)
+```
+
+<details><summary>Correlation plot</summary>
+
+```{r correlation plot, echo = FALSE, results = 'hide'}
+mycorplot(dset = ret.correlation,
+          file = "cache/corplot.png",
+          height = 1560,
+          width = 1640)
+```
+
+<img src = "cache/corplot.png" />
+
+</details>
+
+# Time-to-event analysis
+
+Outcome: incident diabetes (not type 1) & time: time of
+diagnosis. Exclude prevalent diabetes type 2. Cox-regression models
+adjusted for sex, age, east/west, further with BMI, parental history
+of diabetes, systolic blood pressure, triglycerides and mass
+spectrometry batch; third model further with hs-CRP. 
+
+```{r cox covariates, echo = FALSE}
+( cox.covariates <- list("model_1" =  c("BL_AGE", "female", "EAST", "plate"),
+                         "model_2" =  c("BL_AGE", "female", "EAST", "BMI",
+                                        "DIAB_FAMILYHIST", "SYSTM",
+                                        "BP_TREAT", "TRIG", "plate"),
+                         "model_3" =  c("BL_AGE", "female", "EAST", "BMI",
+                                        "DIAB_FAMILYHIST", "SYSTM",
+                                        "BP_TREAT", "TRIG", "hsCRP", "plate")) ) %>%
+    map_df(~data.frame(covariates = paste(., collapse = ", ")), .id = "model") %>%
+    kable
+```
+
+Running Cox models
+
+```{r cox models}
+cox.dm <- lapply(cox.covariates, function(covariates)
+    loop.cox(dset = dset %>% filter(PREVAL_DIAB_T2 == 0),
+             response = "DIAB_T2",
+             loops = getmetabolistes(dset),
+             covariates = covariates))
+```
+
+<details><summary>Comparing significant associations</summary>
+
+```{r cox significant results, echo = FALSE}
+cox.dm %>%
+    map_df(~loop.results(.x), .id = "model") %>%
+    filter(qval < 0.05) %>%
+    mutate(term = bioproperty(term),
+           result = sprintf("%.3f±%.3f", estimate, std.error)) %>%
+    select(model, term, result) %>%
+    spread(model, result) %>%
+    kable
+```
+
+</details>
+
+<details><summary>Numerical results</summary>
+
+```{r cox all results, echo = FALSE}
+cox.dm %>%
+    map_df(~loop.results(.x), .id = "model") %>%
+    arrange(model, qval) %>%
+    kable
+```
+
+</details>
+
+<details><summary>Variables failing proportionality check in last model</summary>
+
+```{r cox check proportionality, echo = FALSE}
+cox.dm %>%
+    lastelement %>%
+    check.proportionality %>%
+    map_df(~as.data.frame(.x$table) %>% tibble::rownames_to_column("term"),
+           .id = "testing") %>%
+    filter(p < 0.05) %>%
+    kable
+```
+
+</details>
+
+<details><summary>Deviance residuals</summary>
+
+```{r coxmodel residuals, echo = FALSE}
+ggsave(file = "cache/coxmodel-residuals.png",
+       plot = grid.arrange(grobs = loop.coxresiduals(filter.significant(cox.dm$model_3)),
+                           ncol = 8,
+                           bottom = "Index number of observer",
+                           left = "Deviance residuals"),
+       height = 40,
+       width = 12,
+       dpi = 300,
+       unit = "in")
+```
+
+<img src = "cache/coxmodel-residuals.png" />
+
+</details>
+
+# Stepwise Cox regression
+
+Stepwise Cox regression with forward selection: choose 5-6 eicosanoids
+and build score out of them (need to check units before
+combining!). Present their associations (forest plot?) and possibly
+replicate in FHS and/or DILGOM.
+
+```{r cox forward dataset}
+dset.fwd <- dset %>%
+    filter(PREVAL_DIAB_T2 == 0) %>%
+    mutate_at(vars(getcategorical(vars.included)), as.numeric) %>%
+    mutate(INCIDENT_DIAB_T2 = ifelse(INCIDENT_DIAB_T2 == 2, 1, 0))
+```
+
+
+Including the significant eicosanoids from the last model in the list
+
+<details><summary>Included eicosanoids</summary>
+
+```{r cox fowrawd significant, echo = FALSE}
+( cox.dm.lastelement.signf <- cox.dm %>%
+    lastelement %>%
+    loop.results %>%
+    filter(qval < 0.05) ) %>%
+    kable
+cox.fwd.mzids <- cox.dm.lastelement.signf %>% pull(term)
+```
+
+</details>
+
+Running stepwise coxph using Bonferroni based p value for including/excluding new terms.
+
+```{r cox forward, results = 'hide'}
+cox.fwd <- stepwise.coxph(Time = "DIAB_T2_AGEDIFF",
+                          Status = "INCIDENT_DIAB_T2",
+                          variable.list = cox.fwd.mzids,
+                          in.variable = lastelement(cox.covariates),
+                          sle = 0.05/length(getmetabolistes(dset)),
+                          sls = 0.05/length(getmetabolistes(dset)),
+                          data = dset.fwd)
+```
+
+<details><summary>Numerical results</summary>
+
+```{r cox forward print results, echo = FALSE}
+cox.fwd %>%
+    tidy %>%
+    kable
+```
+
+</details>
+
+<details><summary>Forest plot</summary>
+
+```{r forest plot, echo = FALSE}
+cox.fwd %>%
+    tidy %>%
+    filter(grepl("mzid", term)) %>%
+    mutate(mean_ci = sprintf("%.2f (%.2f to %.2f)", estimate, conf.low, conf.high),
+           name = bioproperty(term)) %>%
+    replicationforestplot(file = "cache/forestmap.png")
+```
+
+<img src = "cache/forestmap.png" />
+
+</details>
+
+# Risk score
+
+Use quartiles for regression analyses with score, possibly replicate
+in FHS and/or DILGOM. Also of interest: Kaplan-Meier curve for the
+eicosanoid score using lowest and highest quartile.
+
+Using stepwise results to define risk formula.
+
+```{r risk formula}
+getformula(cox.fwd)
+```
+
+Calculating sclaed risk score and risk classes for participant without
+diabetes in baseline.
+
+```{r risk score}
+rset <- getriskset(dset %>% filter(PREVAL_DIAB_T2 == 0), cox.fwd)
+```
+
+<details><summary>Basic characteristics by risk class</summary>
+
+```{r risk score characteristics}
+rset %>%
+    group_by(riskclass) %>%
+    summarize(n = n(),
+              age = mean(BL_AGE),
+              female = sum(female == 1),
+              BMI = mean(BMI),
+              sys = mean(SYSTM),
+              incident_dm = sum(INCIDENT_DIAB_T2),
+              timed_dm = mean(DIAB_T2_AGEDIFF)) %>%
+    kable
+```
+
+</details>
+
+<details><summary>Cox model for risk class</summary>
+
+```{r risk model riskclass, echo = FALSE}
+loop.cox(dset = rset,
+         response = "DIAB_T2",
+         loops = "riskclass",
+         covariates = lastelement(cox.covariates)) %>%
+    map_df(~tidy(.x)) %>%
+    kable
+```
+
+</details>
+
+<details><summary>Cox model for scaled risk score</summary>
+
+```{r risk model riskpersd, echo = FALSE}
+loop.cox(dset = rset,
+         response = "DIAB_T2",
+         loops = c("riskpersd"),
+         covariates = lastelement(cox.covariates)) %>%
+    map_df(~tidy(.x)) %>%
+    kable
+```
+
+</details>
+
+<details><summary>Kaplan-Meier</summary>
+
+```{r kaplan mayer, echo = FALSE}
+g.km <- survfit(Surv(DIAB_T2_AGEDIFF, INCIDENT_DIAB_T2) ~ riskclass, data = rset) %>%
+    ggsurvplot(fit = .,
+               legend = "right", 
+               legend.title = "Risk class",
+               legend.labs = c("Q1", "Q2", "Q3", "Q4"),
+               palette = c("black", "gray50", "gray80", "red"),
+               ylim = c(0.5, 1),
+               surv.scale = "percent")
+
+ggsave(file = "cache/km-riskclass.png",
+       plot = print(g.km),
+       height = 6,
+       width = 7,
+       dpi = 300)
+```
+
+<img src = "cache/km-riskclass.png" />
+
+</details>
+
+```{r save session, echo = FALSE}
+now <- format(Sys.time(), '%Y%m%d-%H%M%S')
+save.image(file = paste0("session/session-", now, ".Rdata"))
+```
