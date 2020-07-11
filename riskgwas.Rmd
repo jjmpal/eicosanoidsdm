@@ -1,0 +1,168 @@
+---
+title: "Gwas for eicosanoids and risk score"
+author: "Joonatan Palmu"
+date: "`r format(Sys.time(), '%d.%m.%Y')`"
+---
+
+```{r options, echo = FALSE}
+options(knitr.kable.NA = "")
+knitr::opts_chunk$set(include = TRUE,
+                      echo = TRUE,
+                      message = FALSE,
+                      results='asis',
+                      cache=FALSE,
+                      warning=FALSE)
+```
+
+# Libraries
+
+<details>
+  <summary>Open/Close</summary>
+
+```{r libraries, results = 'hide'}
+library(dplyr)
+library(knitr)
+library(readr)
+library(gsubfn)
+library(purrr)
+library(ggplot2)
+library(gridExtra)
+library(tidyr)
+```
+
+</details>
+
+# Source code
+
+```{r source file list, echo = FALSE}
+sourcefiles <- c("articles-utils.R")
+```
+
+```{r import source files, echo = FALSE}
+for (f in sourcefiles) {
+    source(f)
+}
+```
+
+```{r embed files to html, echo = FALSE}
+xfun::embed_files(c("riskgwas.Rmd",
+                    sourcefiles,
+                    list.files("scripts", full.names = TRUE)))
+```
+
+#  Folder structure
+
+```{r clean folders}
+mkdir("gwaslogs", "gwascache")
+```
+
+# Converting genotype file format
+
+Converting Oxford-format fileset to PLINK 1 binary format using *normalize.sh* script.
+
+```{r plink, results = 'hide', eval = FALSE}
+lapply(seq(1, 22), function(chr) qsub(chr = chr, arg = "normalize", script = "normalize.sh"))
+qsubwait()
+```
+
+# Running PCA (MDS)
+
+```{r running pca, results = 'hide'}
+qsub(chr = "all", arg = "pca", script = "runpca.sh")
+qsubwait()
+```
+
+
+# Variables for GWAS
+
+Reading the risk score
+
+```{r risk score}
+df.riskset <- readRDS("rds/riskscore.rds") %>%
+     select(Sample_ID, BL_AGE, female, riskpersd, starts_with("mzid"))
+```
+
+Reading the batch code used in sequenzing
+
+```{r read batch}
+df.pheno <- read_tsv("gwasdata/2015_60_Salomaa_Jain_dataFR02_FU17_2020-02-19.txt.gz") %>%
+    select(Sample_ID, BATCH, ALUE)
+```
+
+Reading the top PCA axis for genetic data
+
+```{r mds}
+df.pcaaxes <- read_table("gwascache/merged_MDS_relateds_removed.mds") %>%
+    select(-IID, -SOL)
+```
+
+Joining previous three sources to generate data for GWAS (phenotype, BATCH and PCA-axis are needed).
+
+```{r covariates joined}
+df.joined <-  left_join(df.riskset, df.pheno, by = "Sample_ID") %>%
+    left_join(., df.pcaaxes, by = c("Sample_ID" = "FID"))
+```
+
+## Pihat
+
+```{r pihat}
+df.relatedness <- read_table('gwascache/relatedness.genome')
+{ ggplot(df.relatedness, aes(x=PI_HAT)) +
+      geom_histogram(binwidth=0.005) +
+      scale_y_sqrt() +
+      scale_x_continuous(breaks = seq(0.05,1, 0.05)) +
+      theme(axis.text.x = element_text(angle=45)) } %>%
+    ggsave("cache/gwas-pihat.png", ., width = 10, height = 4, unit = "in")
+```
+
+<img src = "cache/gwas-pihat.png" />
+
+## MDS
+
+```{r plot mds}
+df.pca <- read_table('gwascache/merged_MDS_relateds_removed.mds') %>%
+    right_join(df.pheno, ., by = c("Sample_ID" = "FID")) %>%
+    filter(!is.na(ALUE))
+
+df.pca %>%
+    gather(axis, value, C2:C10) %>%
+    { ggplot(., aes(x = C1, y = value, color = as.factor(ALUE))) +
+          facet_wrap(~axis) +
+          geom_point(alpha = 0.4, size = 0.05) +
+          theme_classic() +
+          scale_colour_manual(name = "Area",
+                              labels = c("2" = "North Karelia",
+                                         "3" = "North Savonia",
+                                         "4" = "Turku/Loimaa",
+                                         "5" = "Helsinki/Vantaa",
+                                         "6" = "Oulu province",
+                                         "7" = "Lapland"),
+                               values = c("2" = "#1B9E77",
+                                         "3" = "#D95F02",
+                                         "4" = "#7570B3",
+                                         "5" = "#E7298A",
+                                         "6" = "#66A61E",
+                                         "7" = "#E6AB02")) +
+          guides(colour = guide_legend(override.aes = list(size=4, shape = 19))) +
+          theme(strip.background = element_blank()) } %>%
+    ggsave("cache/gwas-mds.png", ., width = 10, height = 10, unit = "in")
+```
+
+<img src = "cache/gwas-mds.png" />
+
+# Sample files for GWAS
+
+Creating sample files for GWAS.
+
+```{r export MR data, results = 'hide'}
+lapply(seq(1, 22), function(x, df = df.joined) {
+    snptest.generatefiles(df = df, chr = x)
+})
+```
+
+# Running GWAS
+
+```{r gwas}
+lapply(seq(1, 22), function(chr) qsub(chr = chr, arg = "riskpersd", script = "gwas.sh"))
+qsubwait()
+```

@@ -1,0 +1,190 @@
+---
+title: "Gwas for eicosanoids and risk score"
+author: "Joonatan Palmu"
+date: "`r format(Sys.time(), '%d.%m.%Y')`"
+---
+
+```{r options, echo = FALSE}
+options(knitr.kable.NA = "")
+knitr::opts_chunk$set(include = TRUE,
+                      echo = TRUE,
+                      message = FALSE,
+                      results='asis',
+                      cache=FALSE,
+                      warning=FALSE)
+```
+
+# Libraries
+
+<details>
+  <summary>Open/Close</summary>
+
+```{r libraries, results = 'hide'}
+library(dplyr)
+library(knitr)
+library(readr)
+library(gsubfn)
+library(purrr)
+library(biomaRt)
+library(TwoSampleMR)
+```
+
+</details>
+
+# Source code
+
+```{r source file list, echo = FALSE}
+sourcefiles <- c("articles-utils.R")
+```
+
+```{r import source files, echo = FALSE}
+for (f in sourcefiles) {
+    source(f)
+}
+```
+
+```{r embed files to html, echo = FALSE}
+xfun::embed_files(c("riskmr.Rmd", sourcefiles)
+```
+
+
+## Read gwas results
+
+```{r gwas results}
+df.gwas <- read.gwas(seq(1,22))
+```
+
+# Manhattan plot
+
+```{r manhattan plot}
+don <- df.gwas %>% 
+    group_by(chr) %>% 
+    summarise(chr_len = max(start)) %>% 
+    mutate(cumpos = cumsum(chr_len) - chr_len) %>%
+    dplyr::select(-chr_len)  %>%
+    left_join(df.gwas, ., by=c("chr" = "chr")) %>%
+    mutate(startcum = start + cumpos) %>%
+    arrange(chr, start)
+
+axisdf <- don %>%
+    group_by(chr) %>%
+    summarize(center = (max(as.numeric(startcum)) + min(as.numeric(startcum)))/2)
+
+g.manhattan <- ggplot(don, aes(x = startcum, y = -log10(frequentist_add_pvalue))) +
+    geom_point(aes(color=as.factor(chr)), alpha=0.8, size=0.2) +
+    geom_hline(yintercept = -log10(5e-8), linetype="dashed") +
+    scale_color_manual(values = rep(c("grey", "skyblue"), 22)) +
+    scale_x_continuous(label = axisdf$chr, breaks = axisdf$center) +
+    ylab("-log10(P)") +
+    scale_y_continuous(expand = c(0, 0)) +
+    theme_bw() +
+    theme(axis.title.x=element_blank(),
+          legend.position="none",
+          panel.border = element_blank(),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.x = element_blank())
+
+ggsave("cache/gwas-manhattan.pdf", g.manhattan, width = 10, height = 4, unit = "in")
+```
+
+<img src = "cache/manhattan.png" >
+
+# Filtering results for MR
+
+```{r snpmart}
+snpmart <- useEnsembl(biomart="snp", dataset="hsapiens_snp")
+```
+
+
+```{r test}
+results.formrbase <- df.gwas %>%
+    filter(frequentist_add_pvalue < 5e-8,
+           cohort_1_hwe > 1e-6,
+           all_maf > 0.01,
+           info  > 0.4,
+           nchar(alleleA) == 1,
+           nchar(alleleB) == 1) %>% 
+    dplyr::select(rsid,
+                  alleleA,
+                  alleleB,
+                  all_maf,
+                  frequentist_add_info,
+                  frequentist_add_beta_1,
+                  frequentist_add_se_1,
+                  frequentist_add_pvalue,
+                  chr,
+                  start) %>%
+    dplyr::mutate(snip = getrsid(snpmart, chr, start))
+```
+
+```{r top snips}
+results.formrbase %>%
+    group_by(chr) %>%
+    arrange(frequentist_add_pvalue) %>%
+    top_n(2) %>% dplyr::select(snip, chr, start, frequentist_add_pvalue)
+```
+
+```{r download outcomes}
+ao <- available_outcomes() 
+```
+
+```{r select traits}
+traits <- ao %>% filter(grepl("type 2 diabetes", trait)) %>%
+    arrange(desc(sample_size))
+```
+
+```{r traits}
+traits %>%
+    dplyr::select(id, trait, consortium, author, sample_size) %>%
+    kable
+```
+
+
+```{r test}
+exposure_dat <- results.formrbase %>%
+    format_data(snp_col = 'snip',
+                beta_col = 'frequentist_add_beta_1',
+                se_col = 'frequentist_add_se_1',
+                effect_allele_col = 'alleleA',
+                phenotype_col = 'Phenotype',
+                units_col = 'units',
+                other_allele_col = 'alleleB',
+                eaf_col = 'all_maf',
+                samplesize_col = 'samplesize',
+                ncase_col = 'ncase',
+                ncontrol_col = 'ncontrol',
+                gene_col = 'gene',
+                pval_col = 'frequentist_add_pvalue') %>%
+    clump_data
+
+exposure_dat
+```
+
+```{r analysis}
+outcome_dat <- extract_outcome_data(exposure_dat$SNP,
+                                    "ukb-a-75",
+                                    proxies = 1,
+                                    rsq = 0.8,
+                                    align_alleles = 1,
+                                    palindromes = 1,
+                                    maf_threshold = 0.3)
+
+dat <- harmonise_data(exposure_dat, outcome_dat, action = 2)
+
+mr_results <- mr(dat,  method_list = c("mr_simple_mode",
+                                       "mr_egger_regression",
+                                       "mr_weighted_median",
+                                       "mr_ivw",
+                                       "mr_weighted_mode"))
+```
+
+```{r mrbase results}
+mr_results %>%
+    dplyr::mutate(qval = p.adjust(pval, method="BH")) %>%
+    arrange(pval) %>%
+    dplyr::select(method, b, pval, qval) %>%
+    mutate_if(is.numeric, round, 3) %>%
+    kable
+```
+
+

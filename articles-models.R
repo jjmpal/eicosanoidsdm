@@ -70,7 +70,7 @@ loop.lm <- function(dset,
         ret <- stats::lm(formula = as.formula(fo), data = dset, na.action = na.omit)
         ret$call <- as.formula(fo)
         ret
-    }, mc.cores = min(length(loops), 8))
+    }, mc.cores = min(length(loops), 4))
 }
 
 loop.binomial <- function(dset,
@@ -78,16 +78,15 @@ loop.binomial <- function(dset,
                           loops,
                           covariates = c()) {
     stopifnot(!missing(dset), !missing(response), !missing(loops))
-    parallel::mclapply(c2l(loops), function(loop) {
+    lapply(c2l(loops), function(loop) {
         fo <- myformula(response, loop, covariates)
-        message(fo)
         ret <- stats::glm(formula = as.formula(fo),
                           family=binomial(link='logit'),
                           data = dset,
                           na.action = na.omit)
         ret$call <- as.formula(fo)
         ret
-    }, mc.cores = 8)
+    })
 }
 
 ## COX
@@ -101,12 +100,13 @@ loop.cox <- function(dset,
                     response,
                     loops,
                     covariates = c()) {
-    models <- parallel::mclapply(c2l(loops), function(loop) {
+    parallel::mclapply(c2l(loops), function(loop) {
         fo <- mysurvformula(response, loop, covariates)
         ret <- survival::coxph(formula = as.formula(fo), ties = "breslow", data = dset)
         ret$call <- str2lang(sprintf('survival::coxph(formula = %s, ties = "breslow", data = dset)', fo))
         ret
-    }, mc.cores = min(length(loops), 8))
+    }, mc.cores = min(length(loops), 4)) %>%
+        { if (length(.) == 1) .[[1]] else . }
 }
 
 loop.coxresiduals <- function(...) {
@@ -203,7 +203,7 @@ results.table <- function(df, exponentiate = c("htn", "htn3", "htn.followup"), p
 # Others
 
 spearmancorrelation  <- function(dset, vars) {
-  dat <- dset %>% dplyr::select(vars)
-  colnames(dat) <- colnames(dat) %>% bioproperty()
-  cor <- cor(dat, method = 'spearman')
+    dat <- dset %>% dplyr::select(one_of(vars))
+    colnames(dat) <- colnames(dat) %>% bioproperty()
+    cor(dat, method = 'spearman')
 }

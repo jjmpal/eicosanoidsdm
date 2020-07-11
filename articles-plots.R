@@ -48,7 +48,8 @@ mycorplot <- function(dset, file, height, width) {
                       lwid = c(0.001, 9),
                       margins = c(0, 10),
                       key.par = list(mar=c(2.0, 1.8, 0.5, 15.0), cex=0.5),
-                      keysize=0.5,
+                      cexRow=0.25,
+                      keysize=0.50,
                       key.title = NA,
                       key.xlab = "")
     dev.off()
@@ -58,7 +59,7 @@ replicationforestplot <- function(dset, file) {
     png(width = 1000, height = 520, res = 150, file = file)
     forestplot::forestplot(
                     labeltext = cbind(c("Eicosanoid", NA, dset$name),
-                                      c("FINRISK\nRR (95% CI)", NA, dset$mean_ci)),
+                                      c("FINRISK\nHR (95% CI)", NA, dset$mean_ci)),
                     mean = cbind(c(NA, NA, dset$estimate)),
                     lower = cbind(c(NA, NA, dset$conf.low)),
                     upper = cbind(c(NA, NA, dset$conf.high)),
@@ -66,15 +67,15 @@ replicationforestplot <- function(dset, file) {
                     graph.pos = 3,
                     title = "",
                     xlog = FALSE,
-                    xlab = " β (95%-CI)",
+                    xlab = "HR (95% CI)",
                     txt_gp = fpTxtGp(label = gpar(cex = 1.25),
                                      ticks = gpar(cex = 1.1),
                                      xlab = gpar(cex = 1.2),
                                      title = gpar(cex = 1.2)),
-                    xticks = seq(-1, 1, 0.5),
-                    clip =c(-1, 1),
+                    xticks = seq(0.0, 2.0, 0.5),
+                    clip =exp(c(-1, 1)),
                     col = fpColors(box=c("#0433ff")),
-                    zero = 0, 
+                    zero = 1, 
                     lineheight = unit(16, "mm"),
                     boxsize = 0.15,
                     colgap = unit(4, "mm"),
