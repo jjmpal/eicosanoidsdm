@@ -34,7 +34,6 @@ library(survival)
 library(purrr)
 library(survminer)
 library(tibble)
-library(My.stepwise)
 library(car)
 library(forestplot)
 library(rlang)
@@ -122,11 +121,11 @@ mkdir("cache", "report", "session")
                    "DIAB_T2_AGEDIFF", "continuous", TRUE, FALSE,
                    "EAST", "binomial", TRUE, FALSE,
                    "plate", "categorical", TRUE, FALSE,
-                   "pregnant", "binomial", FALSE, TRUE,
-                   "PREVAL_DIAB_T1", "binomial", FALSE, TRUE,
-                   "INCIDENT_DIAB_T1", "binomial", FALSE, TRUE,
-                   "INCIDENT_CR_ANYCANC", "binomial", FALSE, TRUE,
-                   "PREVAL_CR_ANYCANC", "binomial", FALSE, TRUE) %>%
+                   "pregnant", "binomial", TRUE, TRUE,
+                   "PREVAL_DIAB_T1", "binomial", TRUE, TRUE,
+                   "INCIDENT_DIAB_T1", "binomial", TRUE, TRUE,
+                   "INCIDENT_CR_ANYCANC", "binomial", TRUE, TRUE,
+                   "PREVAL_CR_ANYCANC", "binomial", TRUE, TRUE) %>%
       dplyr::left_join(., importinfo(), by = "var") ) %>%
     kable
 ```
@@ -148,30 +147,24 @@ dset <- ( dset.raw <- importdata(replacenawithmin = TRUE, normalize = TRUE) ) %>
 
 Dimensions before filtering are (`r dim(dset.raw)`) and after filtering (`r dim(dset)`).
 
-<details><summary>Number of missing values in participants</summary>
+<details><summary>Number of participants with missing values (NA)</summary>
 
-```{r filtered values missing, echo = FALSE}
+```{r filtered values missing}
 dset.raw %>%
-    select(any_of(getmissing(mvars))) %>%
-    gather(key, value) %>%
-    group_by(key) %>%
-    summarize(n = n(),
-              n_na = sum(is.na(value))) %>%
+    mutate_all(is.na) %>%
+    count_(vars = getmissing(mvars)) %>%
     kable
 ```
 
 </details>
 
-<details><summary>Number of excluded participants</summary>
+<details><summary>Number of participants with other exclusion criteria</summary>
 
-```{r filtered values excluded, echo = FALSE}
+```{r filtered values excluded}
 dset.raw %>%
-    select(any_of(getfilters(mvars))) %>%
-    gather(key, value) %>%
-    group_by(key) %>%
-    summarize(n = n(),
-              n_na = sum(is.na(value)),
-              n_nonzero = sum(value != 0, na.rm = TRUE)) %>%
+    filter_at(vars(getmissing(mvars)), all_vars(!is.na(.))) %>%
+    mutate_all(~. != 0) %>%
+    count_(vars = getfilters(mvars)) %>%
     kable
 ```
 
@@ -183,9 +176,9 @@ dset.raw %>%
 
 ```{r Characteristics continuous, echo = FALSE}
 dset %>% 
-    dplyr::select(one_of(getcontinuous(mvars))) %>%
-    gather(key, value) %>%
-    group_by(key) %>%
+    dplyr::select(female, one_of(getcontinuous(mvars))) %>%
+    gather(key, value, -female) %>%
+    group_by(key, female) %>%
     summarize(n = n(),
               na = sum(is.na(value)),
               mean = mean(value, na.rm = TRUE),
@@ -203,8 +196,8 @@ dset %>%
 ```{r Characteristics cagegorical, echo = FALSE}
 dset %>%
     select(one_of(getcategorical(mvars) %difference% c("Sample_ID", "plate"))) %>%
-    gather(key, value) %>%
-    group_by(key) %>%
+    gather(key, value, -female) %>%
+    group_by(key, female) %>%
     summarize(n = n(),
               na = sum(is.na(value)),
               zero = sum(value == 0, na.rm = TRUE),
@@ -244,20 +237,6 @@ glm.dm <- loop.binomial(dset = dset,
     kable
 ```
 
-</details>
-
-<details><summary>Manhattan plot</summary>
-
-```{r manhattan plot, echo = FALSE}
-g.manhattan <- plot.manhattanplot(ret.dm, psignf = 0.05, nlabels = 10)
-ggsave(file = "cache/manhattanplot.png",
-       plot = g.manhattan,
-       height = 6,
-       width = 7,
-       dpi = 300)
-```
-
-<img src = "cache/manhattanplot.png" />
 </details>
 
 <details><summary>Residuals</summary>
@@ -378,9 +357,27 @@ mycorplot(dset = ret.correlation,
 
 </details>
 
+<details><summary>Manhattan plot</summary>
+
+```{r manhattan plot, echo = FALSE}
+cox.dm %>%
+    lastelement %>%
+    loop.results %>%
+    plot.manhattanplot(., psignf = 0.05, nlabels = 8) %>%
+    ggsave(file = "cache/manhattanplot.png",
+           plot = .,
+           height = 6,
+           width = 7,
+           dpi = 300)
+```
+
+<img src = "cache/manhattanplot.png" />
+</details>
+
+
 <details><summary>Variables failing proportionality check in last model</summary>
 
-```{r cox check proportionality, eval = FALSE}
+```{r cox check proportionality}
 cox.dm %>%
     lastelement %>%
     check.proportionality %>%

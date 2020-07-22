@@ -1,7 +1,7 @@
 plot.manhattanplot <- function(df,
                                psignf = NULL,
                                nlabels = 10,
-                               pointsize = 1.0,
+                               pointsize = 0.8,
                                xlab = "Eicosanoids Rank Ordered by Mass to Charge Ratio",
                                ylab = "FDR corrected negative Log P Value",
                                color_scheme = c("positive" = "red",
@@ -19,8 +19,9 @@ plot.manhattanplot <- function(df,
     ggplot2::geom_point(ggplot2::aes(color = coloring), size = pointsize) +
     ggrepel::geom_text_repel(data = top_n(dat, n = nlabels, wt = neg_log10_pvalue),
                              ggplot2::aes(label = mzrt),
-                             segment.size = 0.1,
-                             size = 3) +
+                             segment.size = 0.05,
+                             min.segment.length = unit(1, 'mm'),
+                             size = 2) +
       ggplot2::geom_hline(yintercept = -1 * log10(psignf), linetype = 2) +
       ggplot2::scale_x_continuous(name = xlab, breaks = seq(200, 650, 50)) +
       ggplot2::scale_y_continuous(name = ylab, expand = c(0.02, 0)) +
