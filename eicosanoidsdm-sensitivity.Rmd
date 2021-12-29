@@ -1,0 +1,327 @@
+---
+title: "Eicosanoids mediators of diabetes"
+author: "Joonatan Palmu"
+date: "`r format(Sys.time(), '%d.%m.%Y')`"
+---
+
+```{r options, echo = FALSE}
+options(knitr.kable.NA = "")
+knitr::opts_chunk$set(include = TRUE,
+                      echo = TRUE,
+                      message = FALSE,
+                      results = "asis",
+                      cache = FALSE,
+                      warning = FALSE)
+```
+
+# Libraries
+
+<details>
+  <summary>Open/Close</summary>
+
+```{r libraries, results = 'hide'}
+library(dplyr)
+library(sessioninfo)
+library(knitr)
+library(readr)
+library(tidyr)
+library(parallel)
+library(ggplot2)
+library(broom)
+library(gridExtra)
+library(gplots)
+library(survival)
+library(purrr)
+library(survminer)
+library(tibble)
+library(car)
+library(forestplot)
+library(rlang)
+library(ggpubr)
+library(reshape2)
+library(metafor)
+```
+
+</details>
+
+# Session
+
+Analyses were performed using `r sessioninfo::platform_info()$version` on 
+`r sessioninfo::platform_info()$system`.
+
+<details><summary>Packages</summary>
+
+```{r Session info, echo = FALSE}
+sessioninfo::package_info() %>%
+    data.frame %>%
+    filter(attached == TRUE) %>%
+    select(package, loadedversion, date, source) %>%
+    kable(row.names = FALSE)
+```
+
+</details>
+
+# Source code
+
+```{r source file list, echo = FALSE}
+sourcefiles <- c("articles-importer.R",
+                 "articles-utils.R",
+                 "articles-models.R",
+                 "articles-plots.R",
+                 "articles-step.R",
+                 "articles-riskscore.R")
+```
+
+```{r import source files, echo = FALSE}
+for (f in sourcefiles) {
+    source(f)
+}
+```
+
+```{r embed files to html, echo = FALSE}
+xfun::embed_files(c("eicosanoidsdm.Rmd", sourcefiles))
+```
+
+#  Folder structure
+
+```{r clean folders}
+rmdir("cache")
+mkdir("cache", "report", "session", "rds")
+```
+
+# Variables
+
+<details><summary>Included variables</summary>
+
+```{r variables to be include, echo = FALSE}
+(mvars <- tribble(~var, ~type, ~dropmissing, ~useforfiltering,
+                   "Sample_ID", "categorical", TRUE, FALSE,
+                   "BL_AGE", "continuous", TRUE, FALSE,
+                   "female", "binomial", TRUE, FALSE,
+                   "PAINO", "continuous", TRUE, FALSE,
+                   "PITUUS", "continuous", TRUE, FALSE,
+                   "VYOTARO", "continuous", FALSE, FALSE,
+                   "LANTIO", "continuous", FALSE, FALSE,
+                   "BMI", "continuous", TRUE, FALSE,
+                   "WHR", "continuous", FALSE, FALSE,
+                   "SYSTM", "continuous", TRUE, FALSE,
+                   "DIASM", "continuous", FALSE, FALSE,
+                   "HBA1C", "continuous", FALSE, FALSE,
+                   "ALKI2_FR02", "continuous", FALSE, FALSE,
+                   "HDL", "continuous", FALSE, FALSE,
+                   "LDL_DIRECT", "continuous", FALSE, FALSE,
+                   "TRIG", "continuous", TRUE, FALSE,
+                   "BP_TREAT", "binomial", TRUE, FALSE,
+                   "KOULGR", "binomial", FALSE, FALSE,
+                   "CURR_SMOKE", "binomial", FALSE, FALSE,
+                   "Q57X", "categorical", TRUE, FALSE,
+                   "hsCRP", "continuous", TRUE, FALSE,
+                   "DIAB_FAMILYHIST", "binomial", TRUE, FALSE,
+                   "PREVAL_DIAB_T2", "binomial", TRUE, FALSE,
+                   "INCIDENT_DIAB_T2", "binomial", TRUE, FALSE,
+                   "DIAB_T2_AGEDIFF", "continuous", TRUE, FALSE,
+                   "EAST", "binomial", TRUE, FALSE,
+                   "plate", "categorical", TRUE, FALSE,
+                   "pregnant", "binomial", TRUE, TRUE,
+                   "PREVAL_DIAB_T1", "binomial", TRUE, TRUE,
+                   "INCIDENT_DIAB_T1", "binomial", TRUE, TRUE,
+                   "INCIDENT_CR_ANYCANC", "binomial", TRUE, TRUE,
+                  "PREVAL_CR_ANYCANC", "binomial", TRUE, TRUE,
+                  "PREVAL_CVD", "binomial", FALSE, FALSE,
+                  "LIPID_TREAT", "binomial", FALSE, FALSE) %>%
+      dplyr::left_join(., importinfo(), by = "var")) %>%
+    kable
+```
+
+</details>
+
+# Data import
+
+For the analyses, exclude pregnant women, prevalent/incident type 1 diabetics
+and cancers (except non-melanoma skin cancers aka ICD10 category C44).
+
+```{r import data}
+dset <- (dset.raw <- importdata()) %>%
+    filter_at(vars(getmissing(mvars)), all_vars(!is.na(.))) %>%
+    filter_at(vars(getfilters(mvars)), all_vars(. == 0)) %>%
+    mutate_at(vars(getcategorical(mvars)), factor)
+```
+
+```{r koe, eval = FALSE}
+dset %>% pull(WHR) %>% summary
+```
+
+Dimensions before filtering are (`r dim(dset.raw)`) and after filtering (`r dim(dset)`).
+
+```{r cox covariates, echo = FALSE}
+( cox.covariates <- list("model_2" =  c("BL_AGE", "female", "EAST", "plate",
+                                        "BMI", "Q57X", "DIAB_FAMILYHIST",
+										"SYSTM", "BP_TREAT", "TRIG",
+                                        "PREVAL_CVD", "LIPID_TREAT")) ) %>%
+      map_df(~data.frame(covariates = paste(., collapse = ", ")), .id = "model") %>%
+      kable
+```
+
+Running Cox models
+
+```{r cox models}
+cox.dm <- lapply(cox.covariates, function(covariates)
+    loop.cox(dset = dset %>% filter(PREVAL_DIAB_T2 == 0),
+             response = "DIAB_T2",
+             loops = getmetabolistes(dset),
+             covariates = covariates))
+```
+
+```{r correlation model last element, echo = FALSE}
+coxmodel.significant.eicosanoids <- cox.dm[["model_2"]] %>%
+    loop.results %>%
+    filter(qval < 0.05)
+```
+
+# Stepwise Cox regression
+
+
+```{r cox forward dataset}
+dset.fwd <- dset %>%
+    filter(PREVAL_DIAB_T2 == 0) %>%
+#    mutate_at(vars(getcategorical(mvars) %union% "plate" %difference% "INCIDENT_DIAB_T2"), as.numeric) %>%
+    mutate_at(vars("INCIDENT_DIAB_T2"), eventasnumber)
+cox.fwd.mzids <- coxmodel.significant.eicosanoids %>% pull(term)
+```
+
+```{r stepwise covariates}
+( risk.covariates <- list(risk1 = cox.covariates[["model_2"]],
+                          risk2 = cox.covariates[["model_2"]] %difference% "BMI" %union% "WHR",
+                          risk3 = cox.covariates[["model_2"]] %difference% "BMI" %union% "VYOTARO")) %>% 
+    map_df(~data.frame(covariates = paste(., collapse = ", ")), .id = "model") %>%
+    kable
+```
+
+```{r cox normal, results = 'hide'}
+cox.dm <- lapply(risk.covariates, function(covariates)
+    loop.cox(dset = dset %>% filter(PREVAL_DIAB_T2 == 0),
+             response = "DIAB_T2",
+             loops = c("mzid_279.196600_3.7247", "mzid_311.223100_2.9230", "mzid_335.223200_2.6455"),
+             covariates = covariates))
+```
+
+```{r cox normal results, echo = FALSE}
+cox.dm %>%
+    map_df(~loop.results(.x), .id = "model") %>%
+    filter(qval < 0.05) %>%
+    mutate(result = sprintf("%.3f ± %.3f (P=%.3e)", estimate, std.error, p.value)) %>%
+    mutate(term = dplyr::recode(term, `mzid_279.196600_3.7247` = "12-HHTrE",
+                                    `mzid_311.223100_2.9230` = "Unknown eicosanoid (311.2231/2.92)",
+                                    `mzid_335.223200_2.6455` = "8-iso-Prostaglandin A1")) %>% 
+    select(model, term, result) %>%
+    spread(model, result) %>%
+    kable
+```
+
+
+```{r cox forward, results = 'hide'}
+cox.fwd <- lapply(risk.covariates, function(covariates)
+    stepwise.coxph(Time = "DIAB_T2_AGEDIFF",
+                   Status = "INCIDENT_DIAB_T2",
+                   variable.list = cox.fwd.mzids,
+                   in.variable = covariates,
+                   sle = 0.05/length(getmetabolistes(dset)),
+                   sls = 0.05/length(getmetabolistes(dset)),
+                   data = dset.fwd))
+```
+
+```{r koe, eval = FALSE, include = FALSE}
+
+dset.fwd %>% pull(WHR) %>% summary
+
+coxph(formula = Surv(DIAB_T2_AGEDIFF, INCIDENT_DIAB_T2) ~  
+          koe,  
+    data = dset.fwd %>% mutate(koe = LANTIO/VYOTARO))
+
+```
+
+<details><summary>Numerical results</summary>
+
+```{r cox fwd results, echo = FALSE}
+cox.fwd %>%
+    map_df(~tidy(.x, exponentiate = TRUE), .id = "model") %>%
+    kable
+```
+
+</details>
+
+```{r cox check proportionality}
+cox.fwd[["risk2"]]
+cox.fwd[["risk2"]]
+%>%
+    check.proportionality
+
+    map_df(~as.data.frame(.x$table) %>% tibble::rownames_to_column("term"),
+           .id = "testing") %>%
+    kable
+```
+
+## Risk score
+
+```{r risk score}
+df.risk_score <- lapply(c2l(names(risk.covariates)), function(id) {
+    rset <- dset %>%
+        filter(PREVAL_DIAB_T2 == 0) %>%
+        getriskset(., cox.fwd[[id]])
+    loop.cox(dset = rset,
+             response = "DIAB_T2",
+             loops = "riskpersd",
+             covariates = risk.covariates[[id]])
+})
+```
+
+
+```{r risk model riskclass, echo = FALSE}
+df.risk_score %>%
+    map_df(~tidy(.x, exponentiate = TRUE), .id = "model") %>%
+    filter(term == "riskpersd") %>%
+    mutate(p.value = pub.p(p.value)) %>% 
+    kable
+```
+
+# No preval CVD
+
+```{r cox forward no preval cvd, results = 'hide'}
+cox.fwd_nopreval <- stepwise.coxph(Time = "DIAB_T2_AGEDIFF",
+                   Status = "INCIDENT_DIAB_T2",
+                   variable.list = cox.fwd.mzids,
+                   in.variable = cox.covariates[["model_2"]] %difference% "PREVAL_CVD",
+                   sle = 0.05/length(getmetabolistes(dset)),
+                   sls = 0.05/length(getmetabolistes(dset)),
+                   data = dset.fwd %>% filter(PREVAL_CVD == 1))
+```
+
+<details><summary>Numerical results</summary>
+
+```{r cox fwd results no preval cvd, echo = FALSE}
+cox.fwd_nopreval %>%
+    tidy(exponentiate = TRUE) %>% 
+    kable
+```
+
+</details>
+
+## Risk score
+
+```{r risk score no preval cvd}
+rset <- dset %>%
+    filter(PREVAL_DIAB_T2 == 0) %>%
+    getriskset(., cox.fwd_nopreval)
+
+loop.cox(dset = rset,
+         response = "DIAB_T2",
+         loops = "riskpersd",
+         covariates = cox.covariates[["model_2"]] %difference% "PREVAL_CVD") %>%
+    tidy(exponentiate = TRUE) %>% 
+    filter(term == "riskpersd") %>%
+    mutate(p.value = pub.p(p.value)) %>% 
+    kable
+```
+
+
+

@@ -9,9 +9,9 @@ options(knitr.kable.NA = "")
 knitr::opts_chunk$set(include = TRUE,
                       echo = TRUE,
                       message = FALSE,
-                      results='asis',
-                      cache=FALSE,
-                      warning=FALSE)
+                      results = "asis",
+                      cache = FALSE,
+                      warning = FALSE)
 ```
 
 # Libraries
@@ -37,8 +37,9 @@ library(tibble)
 library(car)
 library(forestplot)
 library(rlang)
-library(ggfortify)
 library(ggpubr)
+library(reshape2)
+library(metafor)
 ```
 
 </details>
@@ -85,7 +86,7 @@ xfun::embed_files(c("eicosanoidsdm.Rmd", sourcefiles))
 
 ```{r clean folders}
 rmdir("cache")
-mkdir("cache", "report", "session")
+mkdir("cache", "report", "session", "rds")
 ```
 
 # Variables
@@ -93,7 +94,7 @@ mkdir("cache", "report", "session")
 <details><summary>Included variables</summary>
 
 ```{r variables to be include, echo = FALSE}
-( mvars <- tribble(~var, ~type, ~dropmissing, ~useforfiltering,
+(mvars <- tribble(~var, ~type, ~dropmissing, ~useforfiltering,
                    "Sample_ID", "categorical", TRUE, FALSE,
                    "BL_AGE", "continuous", TRUE, FALSE,
                    "female", "binomial", TRUE, FALSE,
@@ -125,8 +126,10 @@ mkdir("cache", "report", "session")
                    "PREVAL_DIAB_T1", "binomial", TRUE, TRUE,
                    "INCIDENT_DIAB_T1", "binomial", TRUE, TRUE,
                    "INCIDENT_CR_ANYCANC", "binomial", TRUE, TRUE,
-                   "PREVAL_CR_ANYCANC", "binomial", TRUE, TRUE) %>%
-      dplyr::left_join(., importinfo(), by = "var") ) %>%
+                  "PREVAL_CR_ANYCANC", "binomial", TRUE, TRUE,
+                  "PREVAL_CVD", "binomial", FALSE, FALSE,
+                  "LIPID_TREAT", "binomial", FALSE, FALSE) %>%
+      dplyr::left_join(., importinfo(), by = "var")) %>%
     kable
 ```
 
@@ -138,11 +141,10 @@ For the analyses, exclude pregnant women, prevalent/incident type 1 diabetics
 and cancers (except non-melanoma skin cancers aka ICD10 category C44).
 
 ```{r import data}
-dset <- ( dset.raw <- importdata(replacenawithmin = TRUE, normalize = TRUE) ) %>%
+dset <- (dset.raw <- importdata()) %>%
     filter_at(vars(getmissing(mvars)), all_vars(!is.na(.))) %>%
     filter_at(vars(getfilters(mvars)), all_vars(. == 0)) %>%
-    mutate_at(vars(starts_with("INCIDENT_")), ~case_when(. == 1 ~ 1,
-                                                         . == 0 ~ 0))
+    mutate_at(vars(getcategorical(mvars)), factor)
 ```
 
 Dimensions before filtering are (`r dim(dset.raw)`) and after filtering (`r dim(dset)`).
@@ -175,7 +177,7 @@ dset.raw %>%
 <details><summary>Continuous variables</summary>
 
 ```{r Characteristics continuous, echo = FALSE}
-dset %>% 
+dset %>%
     dplyr::select(female, one_of(getcontinuous(mvars))) %>%
     gather(key, value, -female) %>%
     group_by(key, female) %>%
@@ -195,7 +197,7 @@ dset %>%
 
 ```{r Characteristics cagegorical, echo = FALSE}
 dset %>%
-    select(one_of(getcategorical(mvars) %difference% c("Sample_ID", "plate"))) %>%
+    select(one_of(getcategorical(mvars))) %>%
     gather(key, value, -female) %>%
     group_by(key, female) %>%
     summarize(n = n(),
@@ -210,70 +212,6 @@ dset %>%
 
 </deails>
 
-# Association of eicosanoids with outcome variable
-
-Association of eicosanoids with outcome variable (figure 1, for
-example Manhattan plot): how are eicosanoids associated with prevalent
-diabetes? Logistic regression (outcome prevalent type 2 diabetes)
-adjusted for age, sex, BMI, parental history of diabetes, systolic
-blood pressure, antihypertensive medication, trigly and mass
-spectrometry batch. Bonferroni or **FDR correction** for significance
-levels.
-
-```{r manhattan models}
-glm.dm <- loop.binomial(dset = dset,
-                        response = "PREVAL_DIAB_T2",
-                        loops = getmetabolistes(dset),
-                        covariates = c("BL_AGE", "female", "BMI",
-                                       "DIAB_FAMILYHIST", "SYSTM",
-                                       "BP_TREAT", "TRIG", "Q57X", "plate"))
-```
-
-<details><summary>Numerical results</summary>
-
-```{r manhattan results, echo = FALSE}
-( ret.dm <- loop.results(glm.dm, method = "fdr") ) %>%
-    arrange(qval) %>%
-    kable
-```
-
-</details>
-
-<details><summary>Residuals</summary>
-
-```{r residuals, echo = FALSE}
-ggsave(file="cache/binomialmodels-residuals.png",
-       arrangeGrob(grobs = loop.residuals(filter.significant(glm.dm)),
-                   ncol = 8,
-                   bottom = "Predicted values",
-                   left = "Residuals"),
-       height = 20,
-       width = 12,
-       dpi = 300,
-       unit = "in")
-```
-
-<img src="cache/binomialmodels-residuals.png" />
-
-</details>
-
-<details><summary>qq-plot</summary>
-
-```{r binomial qq, echo = FALSE}
-ggsave(file = "cache/binomialmodels-qq.png",
-       plot = grid.arrange(grobs = loop.qq(filter.significant(glm.dm)),
-                           ncol = 8,
-                           bottom = "Theoretical quantiles",
-                           left = "Standardized residuals"),
-       height = 20,
-       width = 12,
-       dpi = 300,
-       unit = "in")
-```
-
-<img src = "cache/binomialmodels-qq.png" />
-
-</details>
 
 # Time-to-event analysis
 
@@ -284,21 +222,21 @@ of diabetes, systolic blood pressure, triglycerides and mass
 spectrometry batch; third model further with hs-CRP. 
 
 ```{r cox covariates, echo = FALSE}
-( cox.covariates <- list("model_1" =  c("BL_AGE", "female", "EAST", "plate"),
-                         "model_2" =  c("BL_AGE", "female", "EAST",
-                                        "BMI", "Q57X",
-                                        "DIAB_FAMILYHIST", "SYSTM",
-                                        "BP_TREAT", "TRIG", "plate"),
-                         "model_3" =  c("BL_AGE", "female", "EAST",
-                                        "BMI", "Q57X",
-                                        "DIAB_FAMILYHIST", "SYSTM",
-                                        "BP_TREAT", "TRIG", "hsCRP",
-                                        "plate")) ) %>%
+( cox.covariates <- list("model_0" =  c("BL_AGE", "female", "EAST", "plate"),
+                         "model_1" =  c("BL_AGE", "female", "EAST",  "plate",
+                                        "BMI", "Q57X", "DIAB_FAMILYHIST", "SYSTM", "BP_TREAT", "TRIG"),
+                         "model_2" =  c("BL_AGE", "female", "EAST", "plate",
+                                        "BMI", "Q57X", "DIAB_FAMILYHIST", "SYSTM", "BP_TREAT", "TRIG",
+                                        "PREVAL_CVD", "LIPID_TREAT"),
+                         "model_3" =  c("BL_AGE", "female", "EAST", "plate",
+                                        "BMI", "Q57X", "DIAB_FAMILYHIST", "SYSTM", "BP_TREAT", "TRIG",
+                                        "PREVAL_CVD", "LIPID_TREAT",
+                                        "hsCRP")) ) %>%
     map_df(~data.frame(covariates = paste(., collapse = ", ")), .id = "model") %>%
     kable
 ```
 
-Running Cox models
+ Running Cox models
 
 ```{r cox models}
 cox.dm <- lapply(cox.covariates, function(covariates)
@@ -332,17 +270,19 @@ cox.dm %>%
     kable
 ```
 
+```{r correlation model last element, echo = FALSE}
+coxmodel.significant.eicosanoids <- cox.dm[["model_2"]] %>%
+    loop.results %>%
+    filter(qval < 0.05)
+```
+
+
 </details>
 
 <details><summary>Correlation plot</summary>
 
 ```{r correlation model, echo = FALSE}
-cox.dm.lastelement.signf <- cox.dm %>%
-    lastelement %>%
-    loop.results %>%
-    filter(qval < 0.05)
-
-ret.correlation <- cox.dm.lastelement.signf$term %union% "hsCRP" %>%
+ret.correlation <- coxmodel.significant.eicosanoids$term %union% "hsCRP" %>%
     spearmancorrelation(dset = dset %>% filter(PREVAL_DIAB_T2 == 0), vars = .)
 ```
 
@@ -360,26 +300,26 @@ mycorplot(dset = ret.correlation,
 <details><summary>Manhattan plot</summary>
 
 ```{r manhattan plot, echo = FALSE}
-cox.dm %>%
-    lastelement %>%
+cox.dm[["model_2"]] %>%
     loop.results %>%
     plot.manhattanplot(., psignf = 0.05, nlabels = 8) %>%
-    ggsave(file = "cache/manhattanplot.png",
+    ggsave(file = "cache/manhattanplot.jpg",
            plot = .,
            height = 6,
            width = 7,
-           dpi = 300)
+           dpi = 600)
 ```
 
-<img src = "cache/manhattanplot.png" />
+<img src = "cache/manhattanplot.jpg" />
 </details>
 
 
 <details><summary>Variables failing proportionality check in last model</summary>
 
+Checking the proportionality assumption using the Schoenfeld residuals
+
 ```{r cox check proportionality}
-cox.dm %>%
-    lastelement %>%
+cox.dm[["model_2"]] %>%
     check.proportionality %>%
     map_df(~as.data.frame(.x$table) %>% tibble::rownames_to_column("term"),
            .id = "testing") %>%
@@ -393,7 +333,7 @@ cox.dm %>%
 
 ```{r coxmodel residuals, echo = FALSE}
 ggsave(file = "cache/coxmodel-residuals.png",
-       plot = grid.arrange(grobs = loop.coxresiduals(filter.significant(cox.dm$model_3)),
+       plot = grid.arrange(grobs = loop.coxresiduals(filter.significant(cox.dm[["model_2"]])),
                            ncol = 8,
                            bottom = "Index number of observer",
                            left = "Deviance residuals"),
@@ -407,6 +347,7 @@ ggsave(file = "cache/coxmodel-residuals.png",
 
 </details>
 
+
 # Stepwise Cox regression
 
 Stepwise Cox regression with forward selection: choose 5-6 eicosanoids
@@ -417,7 +358,9 @@ replicate in FHS and/or DILGOM.
 ```{r cox forward dataset}
 dset.fwd <- dset %>%
     filter(PREVAL_DIAB_T2 == 0) %>%
-    mutate_at(vars(getcategorical(mvars)), as.numeric)
+    mutate_at(vars(getcategorical(mvars) %union% "plate" %difference% "INCIDENT_DIAB_T2"), as.numeric) %>%
+    mutate_at(vars("INCIDENT_DIAB_T2"), eventasnumber)
+cox.fwd.mzids <- coxmodel.significant.eicosanoids %>% pull(term)
 ```
 
 
@@ -426,8 +369,7 @@ Including the significant eicosanoids from the last model in the list
 <details><summary>Included eicosanoids</summary>
 
 ```{r cox fowrawd significant, echo = FALSE}
-cox.dm.lastelement.signf %>% kable
-cox.fwd.mzids <- cox.dm.lastelement.signf %>% pull(term)
+coxmodel.significant.eicosanoids %>% kable
 ```
 
 </details>
@@ -438,7 +380,7 @@ Running stepwise coxph using Bonferroni based p value for including/excluding ne
 cox.fwd <- stepwise.coxph(Time = "DIAB_T2_AGEDIFF",
                           Status = "INCIDENT_DIAB_T2",
                           variable.list = cox.fwd.mzids,
-                          in.variable = lastelement(cox.covariates),
+                          in.variable = cox.covariates[["model_2"]],
                           sle = 0.05/length(getmetabolistes(dset)),
                           sls = 0.05/length(getmetabolistes(dset)),
                           data = dset.fwd)
@@ -458,16 +400,18 @@ cox.fwd %>%
 
 ```{r forest plot, echo = FALSE, results = 'hide'}
 cox.fwd %>%
-    tidy(exponentiate = TRUE) %>%
-    filter(grepl("mzid", term)) %>%
+    tidy(exponentiate = TRUE, conf.int = TRUE) %>%
+    dplyr::filter(grepl("mzid", term)) %>%
     mutate(mean_ci = sprintf("%.2f (%.2f to %.2f)", estimate, conf.low, conf.high),
-           name = bioproperty(term)) %>%
-    replicationforestplot(file = "cache/forestmap.png")
+           mzrt = bioproperty(term)) %>%
+    myforestplot(file = "cache/forestmap.jpg")
 ```
 
-<img src = "cache/forestmap.png" />
+<img src = "cache/forestmap.jpg" />
 
 </details>
+
+
 
 # Risk score
 
@@ -488,17 +432,6 @@ diabetes in baseline.
 rset <- dset %>%
     filter(PREVAL_DIAB_T2 == 0) %>%
     getriskset(., cox.fwd)
-```
-
-```{r store results for gwas, echo = FALSE}
-rset %>%
-    select(Sample_ID,
-           BL_AGE,
-           female,
-           plate,
-           starts_with("risk"),
-           one_of(model.metabolites(cox.fwd))) %>%
-    saveRDS(file = "rds/riskscore.rds")
 ```
 
 <details><summary>Basic characteristics by risk class</summary>
@@ -522,8 +455,8 @@ rset %>%
 
 ```{r risk model riskclass, echo = FALSE}
 lapply(c2l("riskclass", "riskpersd"), function(risk)
-    lapply(list("basemodel" = lastelement(cox.covariates),
-                "interaction" = lastelement(cox.covariates) %union%
+    lapply(list("basemodel" = cox.covariates[["model_2"]],
+                "interaction" = cox.covariates[["model_2"]] %union%
                     paste0(risk, ":female")), function(vars)
                         loop.cox(dset = rset,
                                  response = "DIAB_T2",
@@ -537,28 +470,385 @@ lapply(c2l("riskclass", "riskpersd"), function(risk)
 
 </details>
 
-
 <details><summary>Kaplan-Meier</summary>
 
 ```{r kaplan mayer, echo = FALSE}
-g.km <- survfit(Surv(DIAB_T2_AGEDIFF, INCIDENT_DIAB_T2) ~ riskclass, data = rset) %>%
+g.km <- survfit(Surv(DIAB_T2_AGEDIFF, INCIDENT_DIAB_T2) ~ riskclass, 
+                data = rset %>%
+                    filter(PREVAL_DIAB_T2 == 0) %>%
+                    mutate_at(vars("INCIDENT_DIAB_T2"), eventasnumber)) %>%
     ggsurvplot(fit = .,
-               legend = "right", 
+               pval = TRUE,
+               pval.method = TRUE,
+               pval.coord = c(12, 0.55),
+               pval.method.coord = c(12, 0.60),
+               legend = "right",
                legend.title = "Risk class",
                legend.labs = c("Q1", "Q2", "Q3", "Q4"),
                palette = c("black", "gray50", "gray80", "red"),
+               break.time.by = 3,
+               xlim = c(-0.5, 16),
                ylim = c(0.5, 1),
                xlab = "Time (years)",
                ylab = "Incident type 2 diabetes mellitus",
+               risk.table = TRUE,
+               risk.table.height = 0.4,
                surv.scale = "percent")
 
-ggsave(file = "cache/km-riskclass.png",
+ggsave(file = "cache/km-riskclass.jpg",
        plot = print(g.km),
        height = 6,
        width = 7,
-       dpi = 300)
+       dpi = 600)
 ```
 
-<img src = "cache/km-riskclass.png" />
+<img src = "cache/km-riskclass.jpg" />
 
 </details>
+
+<details>
+<summary>Disease-free survival</summary>
+
+```{r disease free survival}
+rset %>%
+    group_by(riskclass) %>%
+    summarize(event = sum(INCIDENT_DIAB_T2 == 1),
+              noevent = sum(INCIDENT_DIAB_T2 == 0)) %>%
+    mutate(total = event + noevent,
+           dfs = 1-event/total) %>%
+    kable
+```
+
+</details>
+
+
+# Replication
+
+
+## DILGOM replication
+
+Importing dilgom data
+
+```{r dilgom data import}
+dset.dilgom <- (dset.dilgom.raw <- importdata(import = importdilgomdata)) %>%
+    filter_at(vars(getmissing(mvars)), all_vars(!is.na(.))) %>%
+    filter_at(vars(getfilters(mvars)), all_vars(. == 0)) %>%
+    mutate_at(vars(getcategorical(mvars)), factor) %>%
+    rename(LDL_DIRECT = LDL)
+```
+
+<details>
+  <summary>Jitter plots for the three eicosanoids</summary>
+
+```{r plot mzids dilgom, echo = FALSE}
+g.scatter.dilgom <- dset.dilgom %>%
+    select(starts_with("mzid_")) %>%
+    gather(key, value) %>%
+    ggplot(aes(x = key, y = value)) +
+    geom_jitter(shape = ".") +
+    ylim(-3, 4) +
+    labs(title = "DILGOM") +
+    theme_classic() +
+    theme(axis.title.x=element_blank(), axis.title.y=element_blank())
+```
+
+```{r plot mzids fr02, echo = FALSE}
+g.scatter.fr02 <- dset %>%
+    select(one_of("mzid_279.196600_3.7247", "mzid_311.223100_2.9230", "mzid_335.223200_2.6455")) %>%
+    gather(key, value) %>%
+    ggplot(aes(x = key, y = value)) +
+    geom_jitter(shape = ".") +
+    ylim(-3, 4) +
+    labs(title = "FR02") +
+    theme_classic() +
+    theme(axis.title.x=element_blank(), axis.title.y=element_blank())
+```
+
+```{r plot mzids join, echo = FALSE}
+arrangeGrob(g.scatter.dilgom, g.scatter.fr02, ncol = 2) %>%
+       ggsave(file = "cache/eicosanoid_scatter.png",
+              plot = .,
+              height = 6,
+              width = 10,
+              dpi = 300)
+```
+
+<img src = "cache/eicosanoid_scatter.png" />
+
+</details>
+
+<details>
+  <summary>Box plot for the three eicosanoids</summary>
+
+```{r dilgom eicosanoid boxplot}
+( dset.dilgom %>%
+    filter(PREVAL_DIAB_T2 == 0) %>%
+    select(starts_with("mzid_"), INCIDENT_DIAB_T2) %>%
+    gather(key, value, -INCIDENT_DIAB_T2) %>%
+    ggplot(aes(x = value, color = INCIDENT_DIAB_T2)) +
+    facet_wrap(~key) +
+    geom_boxplot(outlier.colour="black", outlier.shape=16, outlier.size=2, notch=FALSE) +
+    xlim(-2, 2) +
+    theme_classic() +
+    theme(axis.title.x=element_blank(), axis.title.y=element_blank()) ) %>%
+    ggsave(file = "cache/eicosanoid_boxplot.png",
+           plot = .,
+              height = 2,
+              width = 10,
+              dpi = 300)
+```
+
+<img src = "cache/eicosanoid_boxplot.png" />
+
+</details>
+
+<details><summary>Number of participants with missing values (NA)</summary>
+
+```{r filtered values missing dilgom}
+dset.dilgom.raw %>%
+    mutate_all(is.na) %>%
+    count_(vars = getmissing(mvars)) %>%
+    kable
+```
+
+</details>
+
+<details><summary>Number of participants with other exclusion criteria</summary>
+
+```{r filtered values excluded dilgom}
+dset.dilgom.raw %>%
+    filter_at(vars(getmissing(mvars)), all_vars(!is.na(.))) %>%
+    mutate_all(~. != 0) %>%
+    count_(vars = getfilters(mvars)) %>%
+    kable
+```
+
+</details>
+
+### DILGOM characteristics
+
+<details><summary>Continuous variables</summary>
+
+```{r Characteristics dilgomcontinuous, echo = FALSE}
+dset.dilgom %>%
+    dplyr::select(female, one_of(getcontinuous(mvars))) %>%
+    gather(key, value, -female) %>%
+    group_by(key, female) %>%
+    summarize(n = n(),
+              na = sum(is.na(value)),
+              mean = mean(value, na.rm = TRUE),
+              sd = sd(value, na.rm = TRUE),
+              gmean = gmean(value, na.rm = TRUE),
+              iqr = IQR(value, na.rm = TRUE)) %>%
+    mutate_if(is.numeric, ~round(., 3)) %>%
+    kable
+```
+
+</details>
+
+<details><summary>Categorical variables</summary>
+
+```{r Characteristics cagegorical dilgom, echo = FALSE}
+dset.dilgom %>%
+    select(one_of(getcategorical(mvars) %difference% c("Sample_ID", "plate"))) %>%
+    gather(key, value, -female) %>%
+    group_by(key, female) %>%
+    summarize(n = n(),
+              na = sum(is.na(value)),
+              zero = sum(value == 0, na.rm = TRUE),
+              one = sum(value == 1, na.rm = TRUE),
+              two = sum(value == 2, na.rm = TRUE),
+              three = sum(value == 3, na.rm = TRUE)) %>%
+    mutate_if(is.numeric, ~round(., 3)) %>%
+    kable
+```
+
+</deails>
+
+
+### Replication results in DILGOM 
+
+<details>
+  <summary>Running Cox models</summary>
+
+```{r single eicosanoid models dilgom}
+cox.dm.dilgom <-  loop.cox(dset = dset.dilgom %>% filter(PREVAL_DIAB_T2 == 0),
+                           response = "DIAB_T2",
+                           loops = getmetabolistes(dset.dilgom),
+                           covariates = cox.covariates[["model_2"]])
+```
+
+```{r single eicosanoid models dilgom results}
+cox.dm.dilgom  %>% loop.results(exponentiate = TRUE) %>% kable
+```
+
+</details>
+
+
+### Risk score in DILGOM
+
+<details>
+  <summary>Risk score</summary>
+
+```{r risk model riskclass dilgom, echo = FALSE}
+rset.dilgom <- dset.dilgom %>%
+    filter(PREVAL_DIAB_T2 == 0) %>%
+    getriskset(., cox.fwd)
+```
+
+ ```{r risk model riskclass dilgom results, echo = FALSE}
+lapply(c2l("riskclass", "riskpersd"), function(risk) {
+    vars <- cox.covariates[["model_2"]] %difference% c("plate")
+        loop.cox(dset = rset.dilgom,
+                 response = "DIAB_T2",
+                 loops = risk,
+                 covariates = vars) }) %>%
+    map_df(~tidy(.x, exponentiate = TRUE), .id = "model") %>%
+    kable()
+```
+
+</details>
+
+## Replication in FHS
+
+```{r replication forest data}
+forest.fhs <-
+    tribble(~term, ~Identity, ~p.value, ~conf.low, ~conf.high, ~estimate,
+            "mzid_279.196600_3.7247", "12-HHTrE", 0.066668527, 0.992064239, 1.27097149, 1.122891519,
+            "mzid_311.223100_2.9230", "Unknown eicosanoid (311.2231/2.92)", 0.343607967, 0.802157423, 1.07983928, 0.93069925,
+            "mzid_335.223200_2.6455", "8-iso-Prostaglandin A1", 0.000720178, 1.080055386, 1.335538077, 1.20102252) 
+```
+
+```{r meta-analysis fhs}
+df.meta.fhs <-
+    tribble(~term, ~estimate, ~conf.low, ~conf.high, ~std.error, ~p.value,
+            "FHS", 1.236414, 1.101545, 1.387795, 0.05893022, 0.000317)
+```
+
+## Comparing replication results
+
+```{r dilgom forest data, echo = FALSE}
+forest.dilgom <- cox.dm.dilgom %>% loop.results(exponentiate = TRUE)
+```
+
+```{r fr02 forest data, echo = FALSE}
+forest.fr02 <- cox.dm[["model_2"]]  %>%
+    loop.results(exponentiate = TRUE) %>%
+    filter(term %in% forest.fhs[["term"]])
+```
+
+```{r Comparing six-eicosanoid results}
+dset.replication <- list(FINRISK = forest.fr02,
+     FHS = forest.fhs,
+     DILGOM = forest.dilgom) %>%
+    map_df(identity, .id = "model") %>%
+    arrange(term, match(model, c("FINRISK", "FHS", "DILGOM"))) %>%
+    mutate(Identity = dplyr::recode(term, `mzid_279.196600_3.7247` = "12-HHTrE",
+                               `mzid_311.223100_2.9230` = "Unknown eicosanoid (311.2231/2.92)",
+                               `mzid_335.223200_2.6455` = "8-iso-Prostaglandin A1"),
+           Identity = ifelse(model == "FINRISK", Identity, "")) %>% 
+    mutate(mean_ci = sprintf("%.2f (%.2f to %.2f)", estimate, conf.low, conf.high))
+```
+
+```{r Plot the forest plot image, echo = FALSE
+replicationforestplot(dset.replication, file = "cache/forestmap-replication.jpg")
+```
+
+<img src = "cache/forestmap-replication.png" />
+
+
+## Meta-analysis
+
+```{r meta-analysis fr02, echo = FALSE}
+df.meta.fr02 <- loop.cox(dset = rset,
+                         response = "DIAB_T2",
+                         loops = "riskpersd",
+                         covariates = cox.covariates[["model_2"]]) %>%
+    tidy(exponentiate = TRUE, conf.int = TRUE) %>%
+    dplyr::filter(grepl("risk", term)) %>%
+    select(-statistic) %>%
+    mutate(term = "FINRISK")
+```
+
+```{r meta-analysis DILGOM, echo = FALSE}
+df.meta.dilgom <- loop.cox(dset = rset.dilgom,
+                         response = "DIAB_T2",
+                         loops = "riskpersd",
+                         covariates = cox.covariates[["model_2"]]) %>%
+    tidy(exponentiate = TRUE, conf.int = TRUE) %>%
+    dplyr::filter(grepl("risk", term)) %>%
+    select(-statistic) %>%
+    mutate(term = "DILGOM")
+```
+
+```{r meta-analysis bind, echo = FALSE}
+df.meta <- rbind(df.meta.fr02,
+                 df.meta.dilgom,
+                 df.meta.fhs)
+```
+
+Meta-analysis model
+
+```{r meta-analysis model}
+ret.meta <- metafor::rma(df.meta$estimate,
+                         sei=df.meta$std.error,
+                         method = "REML") %>%
+    summary %>%
+    coef %>%
+    as.data.frame %>%
+    mutate(term = "Overall")
+```
+
+Meta-analysis results
+
+```{r meta-analysis results}
+{ df.metaforest <- rbind(df.meta %>% select(term,
+                                          estimate,
+                                          conf.low,
+                                          conf.high,
+                                          p.value),
+                         ret.meta %>% select(term,
+                                             estimate,
+                                             conf.low = ci.lb,
+                                             conf.high = ci.ub,
+                                           p.value = pval)) %>%
+      mutate(mean_ci = sprintf("%.2f (%.2f to %.2f)", estimate, conf.low, conf.high),
+             p.value = pub.p(p.value)) } %>%
+    kable
+```
+
+
+```{r saving meta analysis plot, echo = FALSE}
+jpeg(width = 4*1000, height = 4*420, res = 600, file = "cache/metaanalysis.png")
+forestplot::forestplot(
+                labeltext = cbind(c("Cohort", df.metaforest$term),
+                                  c("HR (95% CI)", df.metaforest$mean_ci),
+                                  c("P-value", df.metaforest$p.value)),
+                mean = cbind(c(NA, df.metaforest$estimate)),
+                lower = cbind(c(NA, df.metaforest$conf.low)),
+                upper = cbind(c(NA, df.metaforest$conf.high)),
+                is.summary = c(FALSE,rep(FALSE,nrow(df.metaforest)-1),TRUE),
+                align = c("l", "l", "l"),
+                graph.pos = 3,
+                title = "",
+                xlog = FALSE,
+                xlab = "HR (95% CI)",
+                hrzl_lines=list("2" = gpar(lwd=1, col="#000000")),
+                txt_gp = fpTxtGp(label = gpar(cex = 1.5),
+                                 summary = gpar(cex = 1.5, fontface = "plain"),
+                                 ticks = gpar(cex = 1.5),
+                                 xlab = gpar(cex = 1.5),
+                                 title = gpar(cex = 1.5)),
+                xticks = seq(0.0, 2.0, 0.5),
+                clip =exp(c(-1, 1)),
+                col = fpColors(box = "black", summary = "black"),
+                zero = 1, 
+                lineheight = unit(16, "mm"),
+                boxsize = 0.2,
+                colgap = unit(4, "mm"),
+                lwd.ci = 1)
+dev.off()
+```
+
+<img src = "cache/metaanalysis.png" />
+

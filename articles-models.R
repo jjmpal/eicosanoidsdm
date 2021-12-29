@@ -19,10 +19,6 @@ pass <- function(x, fun) {
     x
 }
 
-lastelement <- function(x) {
-    x[[length(x)]]
-}
-
 ## Operators
 
 `%difference%` <- function(a, b) {
@@ -37,6 +33,11 @@ lastelement <- function(x) {
 `%union%` <- function(a, b) {
     c(a, b)
 }
+
+eventasnumber <- function(x) {
+  as.numeric(levels(x))[x]
+}
+
 
 ## General functions
 
@@ -80,12 +81,11 @@ loop.binomial <- function(dset,
     stopifnot(!missing(dset), !missing(response), !missing(loops))
     lapply(c2l(loops), function(loop) {
         fo <- myformula(response, loop, covariates)
-        ret <- stats::glm(formula = as.formula(fo),
-                          family=binomial(link='logit'),
-                          data = dset,
-                          na.action = na.omit)
-        ret$call <- as.formula(fo)
-        ret
+        message(fo)
+        eval(expr(stats::glm(formula = !!as.formula(fo),
+                             family=binomial(link='logit'),
+                             data = dset,
+                             na.action = na.omit)))
     })
 }
 
@@ -100,12 +100,17 @@ loop.cox <- function(dset,
                     response,
                     loops,
                     covariates = c()) {
-    parallel::mclapply(c2l(loops), function(loop) {
+    dset.processed <- dset %>%
+        mutate_at(vars(sprintf("INCIDENT_%s", response)), eventasnumber) %>%
+        filter_at(vars(sprintf("PREVAL_%s", response)), ~. == 0)
+    mclapply(c2l(loops), function(loop) {
         fo <- mysurvformula(response, loop, covariates)
-        ret <- survival::coxph(formula = as.formula(fo), ties = "breslow", data = dset)
-        ret$call <- str2lang(sprintf('survival::coxph(formula = %s, ties = "breslow", data = dset)', fo))
-        ret
-    }, mc.cores = min(length(loops), 4)) %>%
+        message(fo)
+        eval(expr(survival::coxph(formula = !!as.formula(fo),
+                                  ties = "breslow",
+                                  data = dset.processed,
+                                  na.action = na.exclude)))
+    }, mc.cores = 8) %>%
         { if (length(.) == 1) .[[1]] else . }
 }
 

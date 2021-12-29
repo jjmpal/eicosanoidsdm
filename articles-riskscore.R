@@ -7,6 +7,13 @@ getformula <- function(df, str = "(%.3f)*%s") {
         paste(collapse = " + ")
 }
 
+getriskeicosanoids <- function(df) {
+    df %>%
+        tidy %>%
+        filter(grepl("mzid", term)) %>%
+        pull(term)
+}
+
 getriskset <- function(df, model, nclass = 4) {
     df %>%
         mutate(risk := !!rlang::parse_expr(getformula(model)),

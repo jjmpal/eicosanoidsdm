@@ -1,10 +1,3 @@
-`%format%` <- function(fmt, list) {
-    pat <- "%\\(([^)]*)\\)"
-    fmt2 <- gsub(pat, "%", fmt)
-    list2 <- list[strapplyc(fmt, pat)[[1]]]
-    do.call("sprintf", c(fmt2, list2))
-}
-
 mzrt2mz <- function(mzid) {
   mzid %>%
     gsub("mzid_", "", .) %>%
@@ -19,11 +12,19 @@ mzrt2rt <- function(mzid) {
 }
 
 bioproperty <- function(name, formatter = "%.4f / %.4f") {
-    mzid.subset <- grepl("mzid_", name)
-    name[mzid.subset] <- sprintf(formatter,
-                                 mzrt2mz(name[mzid.subset]),
-                                 mzrt2rt(name[mzid.subset]))
+    mzid_subset <- grepl("mzid_", name)
+    name[mzid_subset] <- sprintf(formatter,
+                                 mzrt2mz(name[mzid_subset]),
+                                 mzrt2rt(name[mzid_subset]))
     name
+}
+
+pub.p <- function(p) {
+  p <- as.numeric(p)
+  fo <- case_when(p < 0.001 ~ "%.2e",
+                  p < 0.01 ~ "%.3f",
+                  TRUE ~ "%.2f")
+  sprintf(fo, p)
 }
 
 gmean <- function(x, na.rm=TRUE){
@@ -38,8 +39,13 @@ pub.mzrt.naive <- function(mzid, formatter = "%.4f / %.4f") {
             as.numeric(gsub(".*_", "", mzid)))
 }
 
-getmetabolistes <- function(dset) {
-    dset %>% select(starts_with("mzid_")) %>% colnames
+getmetabolistes <- function(obj) {
+    if (inherits(obj, "data.frame")) {
+        return(obj %>% select(starts_with("mzid_")) %>% colnames)
+    }
+    if (inherits(obj, "coxph")) {
+        return(obj %>% tidy %>% pull(term) %>% mygrep(word = "mzid_"))
+    }
 }
 
 mkdir <- function(...) {
@@ -56,8 +62,8 @@ rmdir <- function(...) {
         invisible
 }
 
-getcategorical <- function(..., values = c("binomial", "categorical")) {
-    rbind(...) %>% filter(type %in% values) %>% pull(var)
+getcategorical <- function(..., values = c("binomial", "categorical"), exclude = c("Sample_ID", "plate")) {
+    rbind(...) %>% filter(type %in% values) %>% pull(var) %difference% exclude
 }
 
 getcontinuous <- function(..., values = c("continuous")) {
@@ -154,4 +160,17 @@ getrsid <- function(snpmart, chr, pos) {
         message(sprintf("(%i/%i) chr : %s, pos : %s, id : %s", i, length(chr), chr[i], pos[i], ret))
         ret
     }) %>% map_chr(~ifelse(is.na(.x), NA, paste0(.x)))
+}
+
+mybernoulli <- function(x) {
+    rbinom(length(x), 1, 1/(1+exp(-x)))
+}
+
+colsuffix <- function(df, suffix, exclude = "term") {
+    stopifnot(!is_missing(suffix))
+    df %>%
+        mutate_at(vars(contains("p.value")), .funs = format,  digits=3, scientific=TRUE) %>%
+        mutate(mzrt = pub.mzrt.naive(term),
+               mean_ci = sprintf("%.2f (%.2f to %.2f)", estimate, conf.low, conf.high)) %>%
+        rename_at(vars(-one_of(exclude)), ~paste0(., suffix))
 }

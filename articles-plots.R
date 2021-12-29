@@ -56,10 +56,10 @@ mycorplot <- function(dset, file, height, width) {
     dev.off()
 }
 
-replicationforestplot <- function(dset, file) {
-    png(width = 1000, height = 520, res = 150, file = file)
+myforestplot <- function(dset, file) {
+    png(width = 1000, height = 520, res = 300, file = file)
     forestplot::forestplot(
-                    labeltext = cbind(c("Eicosanoid", NA, dset$name),
+                    labeltext = cbind(c("Eicosanoid", NA, dset$mzrt),
                                       c("FINRISK\nHR (95% CI)", NA, dset$mean_ci)),
                     mean = cbind(c(NA, NA, dset$estimate)),
                     lower = cbind(c(NA, NA, dset$conf.low)),
@@ -83,3 +83,36 @@ replicationforestplot <- function(dset, file) {
                     lwd.ci = 1)
     dev.off()
 }
+
+replicationforestplot <- function(dset, file) {
+    png(width = 4*1600, height = 4*600, res = 600, file = file)
+    forestplot::forestplot(
+                    labeltext = cbind(c("Eicosanoid", NA, dset[["Identity"]]),
+                                      c("Cohort", NA, rep(c("FINRISK", "FHS", "DILGOM"), 3)),
+                                      c("HR (95% CI)", NA, dset[["mean_ci"]])),
+                    mean = cbind(c(NA, NA, dset[["estimate"]])),
+                    lower = cbind(c(NA, NA, dset[["conf.low"]])),
+                    upper = cbind(c(NA, NA, dset[["conf.high"]])),
+                    align = c("l", "l", "l"),
+                    graph.pos = 4,
+                    hrzl_lines=list("2" = gpar(lwd=1, col="#000000"),
+                                    "6" = gpar(lwd=1, lineend="butt", columns=c(1:4), col="#9c9c9c"),
+                                    "9" = gpar(lwd=1, lineend="butt", columns=c(1:4), col="#9c9c9c")),
+                    title = "",
+                    xlog = FALSE,
+                    xlab = "HR (95% CI)",
+                    txt_gp = fpTxtGp(label = gpar(cex = 1.5),
+                                     ticks = gpar(cex = 1.5),
+                                     xlab = gpar(cex = 1.5),
+                                     title = gpar(cex = 1.5)),
+                    xticks = seq(0.0, 2.0, 0.5),
+                    clip =exp(c(-1, 1)),
+#                    col = fpColors(box=c("#0433ff", "#ff2500", "#ff00ff")),
+                    zero = 1, 
+                    lineheight = unit(10, "mm"),
+                    boxsize = 0.4,
+                    colgap = unit(4, "mm"),
+                    lwd.ci = 1)
+    dev.off()
+}
+
